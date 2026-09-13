@@ -20,7 +20,7 @@ internal sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(420, 360);
+        ClientSize = new Size(420, 430);
         Font = new Font("Segoe UI", 9f);
 
         var y = 16;
@@ -125,3 +125,4 @@ internal sealed class SettingsForm : Form
         _settings.Save();
     }
 }
+
