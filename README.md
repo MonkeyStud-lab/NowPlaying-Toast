@@ -1,39 +1,71 @@
 ﻿# Now Playing Toast
 
-Windows desktop toast for Apple Music (and other SMTC media apps).
+Windows tray toast for **Apple Music** on Windows 10/11.
 
-When the track changes, a clean dark card pops in the bottom-right with album art, title, artist, and an **Apple Music red** outline.
+When the track changes, a clean card pops up with album art, title, artist, and an Apple Music red outline. Click the toast to focus Apple Music.
 
-## How it works
+## Features
 
-Uses Windows System Media Transport Controls (SMTC) **session events** (`CurrentSessionChanged` / `MediaPropertiesChanged`) so it only wakes when the track changes - no busy polling of Now Playing Session Manager.
-
-Album art is decoded only on a real track change (SMTC thumbnail, with an iTunes lookup fallback).
-
-The app can sit in the tray waiting. It turns on media tracking only while **Apple Music** is running, and goes idle again when Apple Music closes (no separate watcher process).
+- Event-based SMTC (no busy polling)
+- Apple Music only - other media sessions are ignored even if Apple Music is open
+- Single-instance tray app
+- Settings: hold duration, corner, size, theme (Dark/Light), monitor, sound, activate toast, update check
+- Click toast to bring Apple Music to the foreground
+- DPI-aware multi-monitor placement
+- Optional GitHub update notification on startup
 
 ## Requirements
 
 - Windows 10/11
-- .NET 6 Desktop Runtime (or build with the .NET 6 SDK)
+- For development: .NET 6 SDK
+- Published builds are self-contained (no runtime install needed)
 
-## Build
+## Build (dev)
 
 ```bat
 cd src
 dotnet build -c Release
 ```
 
-Copy the output next to the `.cmd` launchers, or run:
+## Publish (single-file)
 
 ```bat
-Start-NowPlaying-Toast.cmd
+Publish.cmd
 ```
+
+This runs:
+
+```bat
+dotnet publish src -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+```
+
+Copy `publish\NowPlayingToast.exe` to the project folder (or use the copy step in Publish.cmd).
 
 ## Run
 
-- `Start-NowPlaying-Toast.cmd` - start (waits for Apple Music if it is not open yet)
+- `Start-NowPlaying-Toast.cmd` - start (waits quietly until Apple Music opens)
 - `Stop-NowPlaying-Toast.cmd` - quit
 - `Add-To-Startup.cmd` - launch with Windows
 
-Tray icon: **Show current track** to preview. When Apple Music opens it shows the current song once so you can confirm it is working.
+Tray menu: **Show current track**, **Settings**, **About**, **Exit**.
+
+## Settings
+
+Stored at `%AppData%\NowPlayingToast\settings.json`:
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| Hold duration | 4.2 s | How long the toast stays visible |
+| Corner | BottomRight | BottomRight / BottomLeft / TopRight / TopLeft |
+| Size | Normal | Small / Normal / Large |
+| Theme | Dark | Dark / Light (red accent kept) |
+| Monitor | Primary | Primary or a specific screen index |
+| Show on Apple Music activate | true | Toast once when Music opens |
+| Play sound on toast | false | Short system sound |
+| Check for updates on startup | true | GitHub Releases notify only |
+
+Changes apply without a full restart where practical.
+
+## Version
+
+1.1.0 - https://github.com/MonkeyStud-lab/NowPlaying-Toast
