@@ -10,6 +10,8 @@ Uses Windows System Media Transport Controls (SMTC) **session events** (`Current
 
 Album art is decoded only on a real track change (SMTC thumbnail, with an iTunes lookup fallback).
 
+By default the **Apple Music watcher** keeps the toast off until Apple Music is running, then starts it, and quits the toast when Apple Music closes.
+
 ## Requirements
 
 - Windows 10/11
@@ -22,16 +24,13 @@ cd src
 dotnet build -c Release
 ```
 
-Copy the output next to the `.cmd` launchers, or run:
-
-```bat
-Start-NowPlaying-Toast.cmd
-```
+Copy the output next to the `.cmd` launchers, or run the watcher / start scripts below.
 
 ## Run
 
-- `Start-NowPlaying-Toast.cmd` - start
-- `Stop-NowPlaying-Toast.cmd` - quit
-- `Add-To-Startup.cmd` - launch with Windows
+- `Start-AppleMusic-Watcher.cmd` - recommended: toast only while Apple Music is open
+- `Start-NowPlaying-Toast.cmd` - force-start the toast alone (manual)
+- `Stop-NowPlaying-Toast.cmd` - quit toast and watcher
+- `Add-To-Startup.cmd` - run the watcher at login (toast still only with Apple Music)
 
 Tray icon: **Show current track** to preview. On launch it shows the current song once so you can confirm it is working.
