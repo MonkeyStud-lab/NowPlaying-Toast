@@ -34,4 +34,4 @@ Start-NowPlaying-Toast.cmd
 - `Stop-NowPlaying-Toast.cmd` - quit
 - `Add-To-Startup.cmd` - launch with Windows
 
-Tray icon → **Show current track** to preview. On launch it shows the current song once so you can confirm it is working.
+Tray icon: **Show current track** to preview. On launch it shows the current song once so you can confirm it is working.
