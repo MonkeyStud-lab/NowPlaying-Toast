@@ -36,7 +36,8 @@ internal sealed class ToastApp : ApplicationContext
         _tray.ContextMenuStrip.Items.Add("Show current track", null, async (_, _) => await ShowNowAsync());
         _tray.ContextMenuStrip.Items.Add("Exit", null, (_, _) => ExitApp());
 
-        _pollTimer = new System.Windows.Forms.Timer { Interval = 800 };
+        // Lightweight metadata poll only — no album art decode
+        _pollTimer = new System.Windows.Forms.Timer { Interval = 1500 };
         _pollTimer.Tick += async (_, _) => await PollAsync();
         _pollTimer.Start();
 
@@ -52,7 +53,7 @@ internal sealed class ToastApp : ApplicationContext
 
     private async Task ShowNowAsync()
     {
-        var np = await NowPlaying.GetAsync();
+        var np = await NowPlaying.GetAsync(includeArt: true);
         if (np is null)
         {
             _form.ShowMessage("Nothing playing", "Start a song in Apple Music, then try again.");
@@ -67,13 +68,26 @@ internal sealed class ToastApp : ApplicationContext
     {
         try
         {
-            var np = await NowPlaying.GetAsync();
-            if (np is null) { _primed = true; return; }
-            if (!_primed) { _lastKey = np.Key; _primed = true; return; }
-            if (np.Key != _lastKey)
+            var meta = await NowPlaying.GetAsync(includeArt: false);
+            if (meta is null)
             {
-                _lastKey = np.Key;
-                _form.ShowTrack(np);
+                _primed = true;
+                return;
+            }
+
+            if (!_primed)
+            {
+                _lastKey = meta.Key;
+                _primed = true;
+                return;
+            }
+
+            if (meta.Key != _lastKey)
+            {
+                _lastKey = meta.Key;
+                // Track changed — fetch art once
+                var full = await NowPlaying.GetAsync(includeArt: true) ?? meta;
+                _form.ShowTrack(full);
             }
         }
         catch { }
@@ -101,7 +115,7 @@ internal sealed class NowPlayingInfo
 
 internal static class NowPlaying
 {
-    public static async Task<NowPlayingInfo?> GetAsync()
+    public static async Task<NowPlayingInfo?> GetAsync(bool includeArt)
     {
         var mgr = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
         var session = mgr.GetCurrentSession();
@@ -111,27 +125,33 @@ internal static class NowPlaying
         var title = (props.Title ?? "").Trim();
         if (string.IsNullOrWhiteSpace(title)) return null;
 
-        Image? art = null;
-        try
-        {
-            if (props.Thumbnail is not null)
-            {
-                using var ras = await props.Thumbnail.OpenReadAsync();
-                art = await DecodeImageAsync(ras);
-            }
-        }
-        catch { }
-
         var artist = (props.Artist ?? "").Trim();
-        if (art is null)
-            art = await TryItunesArtAsync(title, artist);
+        var album = (props.AlbumTitle ?? "").Trim();
+        var app = NiceApp(session.SourceAppUserModelId ?? "");
+
+        Image? art = null;
+        if (includeArt)
+        {
+            try
+            {
+                if (props.Thumbnail is not null)
+                {
+                    using var ras = await props.Thumbnail.OpenReadAsync();
+                    art = await DecodeImageAsync(ras);
+                }
+            }
+            catch { }
+
+            if (art is null)
+                art = await TryItunesArtAsync(title, artist);
+        }
 
         return new NowPlayingInfo
         {
             Title = title,
             Artist = artist,
-            Album = (props.AlbumTitle ?? "").Trim(),
-            App = NiceApp(session.SourceAppUserModelId ?? ""),
+            Album = album,
+            App = app,
             Art = art
         };
     }
@@ -157,7 +177,20 @@ internal static class NowPlaying
         reader.Dispose();
         using var ms = new MemoryStream(bytes);
         using var img = Image.FromStream(ms);
-        return new Bitmap(img);
+        // Cap decode size to reduce CPU/RAM
+        var bmp = new Bitmap(img);
+        if (bmp.Width > 300 || bmp.Height > 300)
+        {
+            var scaled = new Bitmap(300, 300);
+            using (var g = Graphics.FromImage(scaled))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(bmp, 0, 0, 300, 300);
+            }
+            bmp.Dispose();
+            return scaled;
+        }
+        return bmp;
     }
 
     private static async Task<Image?> TryItunesArtAsync(string title, string artist)
@@ -170,18 +203,18 @@ internal static class NowPlaying
             var titleClean = title.Replace("/", " ").Replace("(feat.", " ").Replace("(Feat.", " ").Replace(")", " ");
             var queries = new[] { artistClean + " " + titleClean, artistClean + " " + title.Split('(')[0], titleClean };
 
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             foreach (var q in queries)
             {
                 var url = "https://itunes.apple.com/search?term=" + Uri.EscapeDataString(q.Trim()) +
-                          "&entity=song&limit=5&media=music";
+                          "&entity=song&limit=3&media=music";
                 var json = await http.GetStringAsync(url);
                 using var doc = System.Text.Json.JsonDocument.Parse(json);
                 if (!doc.RootElement.TryGetProperty("results", out var results) || results.GetArrayLength() == 0)
                     continue;
                 var artUrl = results[0].GetProperty("artworkUrl100").GetString();
                 if (string.IsNullOrEmpty(artUrl)) continue;
-                artUrl = artUrl.Replace("100x100bb", "600x600bb");
+                artUrl = artUrl.Replace("100x100bb", "300x300bb");
                 var bytes = await http.GetByteArrayAsync(artUrl);
                 using var ms = new MemoryStream(bytes);
                 using var img = Image.FromStream(ms);
@@ -195,7 +228,6 @@ internal static class NowPlaying
 
 internal sealed class ToastForm : Form
 {
-    // Apple Music–ish red
     private static readonly Color AppleRed = Color.FromArgb(250, 45, 70);
     private static readonly Color AppleRedSoft = Color.FromArgb(180, 250, 45, 70);
     private static readonly Color CardBg = Color.FromArgb(28, 28, 30);
@@ -224,7 +256,7 @@ internal sealed class ToastForm : Form
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, Width + 1, Height + 1, 18, 18));
 
-        _anim = new System.Windows.Forms.Timer { Interval = 15 };
+        _anim = new System.Windows.Forms.Timer { Interval = 16 };
         _anim.Tick += (_, _) => OnAnim();
 
         _hold = new System.Windows.Forms.Timer { Interval = 4200 };
@@ -265,6 +297,7 @@ internal sealed class ToastForm : Form
         _app = np.App;
         _art?.Dispose();
         _art = np.Art is null ? null : new Bitmap(np.Art);
+        np.Art?.Dispose();
         BeginShow();
     }
 
@@ -292,10 +325,13 @@ internal sealed class ToastForm : Form
         {
             _t = Math.Min(1f, _t + 0.08f);
             Opacity = Math.Min(0.98, _t);
+            Invalidate();
             if (_t >= 1f)
             {
                 _phase = Phase.Holding;
                 Opacity = 0.98;
+                _anim.Stop(); // IMPORTANT: don't paint at 60fps while idle
+                Invalidate();
                 _hold.Stop();
                 _hold.Start();
             }
@@ -304,6 +340,7 @@ internal sealed class ToastForm : Form
         {
             _t = Math.Max(0f, _t - 0.1f);
             Opacity = Math.Max(0.05, _t);
+            Invalidate();
             if (_t <= 0f)
             {
                 _phase = Phase.Hidden;
@@ -312,7 +349,10 @@ internal sealed class ToastForm : Form
                 Hide();
             }
         }
-        Invalidate();
+        else
+        {
+            _anim.Stop();
+        }
     }
 
     private void Render(Graphics g)
@@ -321,7 +361,6 @@ internal sealed class ToastForm : Form
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
         g.Clear(CardBg);
 
-        // Soft red outline (double stroke for a nicer Apple-like edge)
         using (var path = RoundRect(1, 1, Width - 3, Height - 3, 16))
         {
             using var glow = new Pen(AppleRedSoft, 4f);
@@ -330,7 +369,6 @@ internal sealed class ToastForm : Form
             g.DrawPath(edge, path);
         }
 
-        // Album art with slight rounded clip
         int artSize = 80;
         int artX = 14;
         int artY = (Height - artSize) / 2;
