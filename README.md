@@ -6,7 +6,7 @@ When the track changes, a clean dark card pops in the bottom-right with album ar
 
 ## How it works
 
-Uses Windows System Media Transport Controls (SMTC) **session events** (`CurrentSessionChanged` / `MediaPropertiesChanged`) so it only wakes when the track changes — no busy polling of Now Playing Session Manager.
+Uses Windows System Media Transport Controls (SMTC) **session events** (`CurrentSessionChanged` / `MediaPropertiesChanged`) so it only wakes when the track changes - no busy polling of Now Playing Session Manager.
 
 Album art is decoded only on a real track change (SMTC thumbnail, with an iTunes lookup fallback).
 
@@ -30,8 +30,8 @@ Start-NowPlaying-Toast.cmd
 
 ## Run
 
-- `Start-NowPlaying-Toast.cmd` — start
-- `Stop-NowPlaying-Toast.cmd` — quit
-- `Add-To-Startup.cmd` — launch with Windows
+- `Start-NowPlaying-Toast.cmd` - start
+- `Stop-NowPlaying-Toast.cmd` - quit
+- `Add-To-Startup.cmd` - launch with Windows
 
 Tray icon → **Show current track** to preview. On launch it shows the current song once so you can confirm it is working.
