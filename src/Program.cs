@@ -18,13 +18,17 @@ internal static class Program
 internal sealed class ToastApp : ApplicationContext
 {
     private readonly NotifyIcon _tray;
-    private readonly System.Windows.Forms.Timer _pollTimer;
     private readonly ToastForm _form;
+    private readonly SynchronizationContext _ui;
+    private GlobalSystemMediaTransportControlsSessionManager? _mgr;
+    private GlobalSystemMediaTransportControlsSession? _session;
     private string _lastKey = "";
     private bool _primed;
+    private int _busy; // 0/1 reentrancy guard
 
     public ToastApp()
     {
+        _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _form = new ToastForm();
         _tray = new NotifyIcon
         {
@@ -33,39 +37,56 @@ internal sealed class ToastApp : ApplicationContext
             Icon = SystemIcons.Application,
             ContextMenuStrip = new ContextMenuStrip()
         };
-        _tray.ContextMenuStrip.Items.Add("Show current track", null, async (_, _) => await ShowNowAsync());
+        _tray.ContextMenuStrip.Items.Add("Show current track", null, (_, _) => _ = ShowNowAsync());
         _tray.ContextMenuStrip.Items.Add("Exit", null, (_, _) => ExitApp());
 
-        // Lightweight metadata poll only — no album art decode
-        _pollTimer = new System.Windows.Forms.Timer { Interval = 1500 };
-        _pollTimer.Tick += async (_, _) => await PollAsync();
-        _pollTimer.Start();
+        _ = InitMediaAsync();
+    }
 
-        var boot = new System.Windows.Forms.Timer { Interval = 1000 };
-        boot.Tick += async (_, _) =>
+    private async Task InitMediaAsync()
+    {
+        try
         {
-            boot.Stop();
-            boot.Dispose();
+            _mgr = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+            _mgr.CurrentSessionChanged += (_, _) => Post(() => _ = OnSessionChangedAsync());
+            await OnSessionChangedAsync();
+
+            // One boot toast after a beat
+            await Task.Delay(800);
             await ShowNowAsync();
-        };
-        boot.Start();
-    }
-
-    private async Task ShowNowAsync()
-    {
-        var np = await NowPlaying.GetAsync(includeArt: true);
-        if (np is null)
-        {
-            _form.ShowMessage("Nothing playing", "Start a song in Apple Music, then try again.");
-            return;
         }
-        _lastKey = np.Key;
-        _primed = true;
-        _form.ShowTrack(np);
+        catch { }
     }
 
-    private async Task PollAsync()
+    private void Post(Action a) => _ui.Post(_ => a(), null);
+
+    private async Task OnSessionChangedAsync()
     {
+        if (_session is not null)
+        {
+            _session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
+            _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
+            _session = null;
+        }
+
+        if (_mgr is null) return;
+        _session = _mgr.GetCurrentSession();
+        if (_session is null) return;
+
+        _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
+        _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
+        await HandlePossibleTrackChangeAsync();
+    }
+
+    private void OnMediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args)
+        => Post(() => _ = HandlePossibleTrackChangeAsync());
+
+    private void OnPlaybackInfoChanged(GlobalSystemMediaTransportControlsSession sender, PlaybackInfoChangedEventArgs args)
+        => Post(() => _ = HandlePossibleTrackChangeAsync());
+
+    private async Task HandlePossibleTrackChangeAsync()
+    {
+        if (Interlocked.Exchange(ref _busy, 1) == 1) return;
         try
         {
             var meta = await NowPlaying.GetAsync(includeArt: false);
@@ -82,20 +103,35 @@ internal sealed class ToastApp : ApplicationContext
                 return;
             }
 
-            if (meta.Key != _lastKey)
-            {
-                _lastKey = meta.Key;
-                // Track changed — fetch art once
-                var full = await NowPlaying.GetAsync(includeArt: true) ?? meta;
-                _form.ShowTrack(full);
-            }
+            if (meta.Key == _lastKey) return;
+            _lastKey = meta.Key;
+            var full = await NowPlaying.GetAsync(includeArt: true) ?? meta;
+            _form.ShowTrack(full);
         }
         catch { }
+        finally { Interlocked.Exchange(ref _busy, 0); }
+    }
+
+    private async Task ShowNowAsync()
+    {
+        var np = await NowPlaying.GetAsync(includeArt: true);
+        if (np is null)
+        {
+            _form.ShowMessage("Nothing playing", "Start a song in Apple Music, then try again.");
+            return;
+        }
+        _lastKey = np.Key;
+        _primed = true;
+        _form.ShowTrack(np);
     }
 
     private void ExitApp()
     {
-        _pollTimer.Stop();
+        if (_session is not null)
+        {
+            _session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
+            _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
+        }
         _tray.Visible = false;
         _tray.Dispose();
         _form.Dispose();
@@ -177,7 +213,6 @@ internal static class NowPlaying
         reader.Dispose();
         using var ms = new MemoryStream(bytes);
         using var img = Image.FromStream(ms);
-        // Cap decode size to reduce CPU/RAM
         var bmp = new Bitmap(img);
         if (bmp.Width > 300 || bmp.Height > 300)
         {
@@ -330,7 +365,7 @@ internal sealed class ToastForm : Form
             {
                 _phase = Phase.Holding;
                 Opacity = 0.98;
-                _anim.Stop(); // IMPORTANT: don't paint at 60fps while idle
+                _anim.Stop();
                 Invalidate();
                 _hold.Stop();
                 _hold.Start();
