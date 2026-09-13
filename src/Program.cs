@@ -1,4 +1,5 @@
-﻿using System.Drawing;
+﻿using System.Diagnostics;
+using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
@@ -20,11 +21,13 @@ internal sealed class ToastApp : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly ToastForm _form;
     private readonly SynchronizationContext _ui;
+    private readonly System.Windows.Forms.Timer _musicWatch;
     private GlobalSystemMediaTransportControlsSessionManager? _mgr;
     private GlobalSystemMediaTransportControlsSession? _session;
     private string _lastKey = "";
     private bool _primed;
-    private int _busy; // 0/1 reentrancy guard
+    private bool _musicActive;
+    private int _busy;
 
     public ToastApp()
     {
@@ -33,34 +36,76 @@ internal sealed class ToastApp : ApplicationContext
         _tray = new NotifyIcon
         {
             Visible = true,
-            Text = "Now Playing Toast",
+            Text = "Now Playing Toast - waiting for Apple Music",
             Icon = SystemIcons.Application,
             ContextMenuStrip = new ContextMenuStrip()
         };
         _tray.ContextMenuStrip.Items.Add("Show current track", null, (_, _) => _ = ShowNowAsync());
         _tray.ContextMenuStrip.Items.Add("Exit", null, (_, _) => ExitApp());
 
-        _ = InitMediaAsync();
+        _musicWatch = new System.Windows.Forms.Timer { Interval = 2000 };
+        _musicWatch.Tick += (_, _) => OnMusicWatchTick();
+        _musicWatch.Start();
+        OnMusicWatchTick(); // immediate check
     }
 
-    private async Task InitMediaAsync()
+    private static bool IsAppleMusicRunning()
+        => Process.GetProcessesByName("AppleMusic").Length > 0;
+
+    private void OnMusicWatchTick()
+    {
+        var running = IsAppleMusicRunning();
+        if (running && !_musicActive)
+        {
+            _musicActive = true;
+            _tray.Text = "Now Playing Toast";
+            _ = ActivateForMusicAsync();
+        }
+        else if (!running && _musicActive)
+        {
+            _musicActive = false;
+            DeactivateFromMusic();
+            _tray.Text = "Now Playing Toast - waiting for Apple Music";
+        }
+    }
+
+    private async Task ActivateForMusicAsync()
     {
         try
         {
+            _lastKey = "";
+            _primed = false;
             _mgr = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
-            _mgr.CurrentSessionChanged += (_, _) => Post(() => _ = OnSessionChangedAsync());
+            _mgr.CurrentSessionChanged += OnCurrentSessionChanged;
             await OnSessionChangedAsync();
-
-            // One boot toast after a beat
             await Task.Delay(800);
-            await ShowNowAsync();
+            if (_musicActive)
+                await ShowNowAsync();
         }
         catch { }
     }
 
+    private void DeactivateFromMusic()
+    {
+        try
+        {
+            if (_mgr is not null)
+                _mgr.CurrentSessionChanged -= OnCurrentSessionChanged;
+            DetachSession();
+            _mgr = null;
+            _lastKey = "";
+            _primed = false;
+            _form.HideImmediate();
+        }
+        catch { }
+    }
+
+    private void OnCurrentSessionChanged(GlobalSystemMediaTransportControlsSessionManager sender, CurrentSessionChangedEventArgs args)
+        => Post(() => _ = OnSessionChangedAsync());
+
     private void Post(Action a) => _ui.Post(_ => a(), null);
 
-    private async Task OnSessionChangedAsync()
+    private void DetachSession()
     {
         if (_session is not null)
         {
@@ -68,11 +113,14 @@ internal sealed class ToastApp : ApplicationContext
             _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
             _session = null;
         }
+    }
 
-        if (_mgr is null) return;
+    private async Task OnSessionChangedAsync()
+    {
+        DetachSession();
+        if (_mgr is null || !_musicActive) return;
         _session = _mgr.GetCurrentSession();
         if (_session is null) return;
-
         _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
         _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
         await HandlePossibleTrackChangeAsync();
@@ -86,6 +134,7 @@ internal sealed class ToastApp : ApplicationContext
 
     private async Task HandlePossibleTrackChangeAsync()
     {
+        if (!_musicActive) return;
         if (Interlocked.Exchange(ref _busy, 1) == 1) return;
         try
         {
@@ -114,6 +163,12 @@ internal sealed class ToastApp : ApplicationContext
 
     private async Task ShowNowAsync()
     {
+        if (!_musicActive)
+        {
+            _form.ShowMessage("Waiting for Apple Music", "Open Apple Music, then try again.");
+            return;
+        }
+
         var np = await NowPlaying.GetAsync(includeArt: true);
         if (np is null)
         {
@@ -127,11 +182,9 @@ internal sealed class ToastApp : ApplicationContext
 
     private void ExitApp()
     {
-        if (_session is not null)
-        {
-            _session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
-            _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
-        }
+        _musicWatch.Stop();
+        _musicWatch.Dispose();
+        DeactivateFromMusic();
         _tray.Visible = false;
         _tray.Dispose();
         _form.Dispose();
@@ -314,6 +367,15 @@ internal sealed class ToastForm : Form
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+
+    public void HideImmediate()
+    {
+        _hold.Stop();
+        _anim.Stop();
+        _phase = Phase.Hidden;
+        Opacity = 1;
+        Hide();
+    }
 
     public void ShowMessage(string title, string body)
     {
