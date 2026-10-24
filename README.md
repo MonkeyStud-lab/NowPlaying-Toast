@@ -98,6 +98,6 @@ dotnet publish src\NowPlayingToast.csproj -c Release -r win-x64 --self-contained
 - **Cannot stop an older release:** Use **Exit** in its tray menu; older releases may not support `--exit`.
 - **Persistent playback or startup errors:** Check `%LocalAppData%\NowPlayingToast\app.log` for local diagnostics. The log rotates at approximately 256 KB and keeps one previous file as `app.log.old`.
 
-## Version and unreleased refinements
+## Version
 
-Source version: **1.1.0**. The faster track/art handling, event-driven lifecycle, safer settings, local diagnostics, .NET 10 build, automated checks, startup shortcut/removal, and graceful-stop refinements are unreleased changes. The existing v1.1.0 download may not contain them; the assembly version will be updated when a new release is prepared.
+Source version: **1.2.0**. This version includes verified catalog artwork, faster track/art handling, lower-memory publishing, an event-driven lifecycle, safer settings, local diagnostics, .NET 10 builds, automated checks, startup shortcut/removal, and graceful shutdown. Settings remain compatible with v1.1.0. Download the Windows package from [GitHub Releases](https://github.com/MonkeyStud-lab/NowPlaying-Toast/releases/latest).
