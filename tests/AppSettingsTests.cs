@@ -113,7 +113,9 @@ public sealed class AppSettingsTests : IDisposable
         var marker = Path.Combine(SettingsPath, "previous-settings");
         File.WriteAllText(marker, "preserve me");
 
-        Assert.ThrowsAny<IOException>(() => new AppSettings().SaveTo(SettingsPath));
+        var error = Record.Exception(() => new AppSettings().SaveTo(SettingsPath));
+        // Windows reports access denied; Unix commonly reports a destination I/O error.
+        Assert.True(error is IOException or UnauthorizedAccessException);
 
         Assert.Equal("preserve me", File.ReadAllText(marker));
         Assert.Empty(Directory.GetFiles(_directory));
@@ -129,7 +131,10 @@ public sealed class AppSettingsTests : IDisposable
         File.WriteAllText(SettingsPath, original);
 
         using (var lockedFile = new FileStream(SettingsPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            Assert.ThrowsAny<IOException>(() => new AppSettings().SaveTo(SettingsPath));
+        {
+            var error = Record.Exception(() => new AppSettings().SaveTo(SettingsPath));
+            Assert.True(error is IOException or UnauthorizedAccessException);
+        }
 
         Assert.Equal(original, File.ReadAllText(SettingsPath));
         Assert.Single(Directory.GetFiles(_directory));
