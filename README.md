@@ -10,6 +10,8 @@ A Windows tray app for **Apple Music**. When the track changes, a card shows its
 
 The published app is self-contained; you do not need to install .NET to use it. Development builds can also be downloaded from successful **Windows build** runs under the repository's **Actions** tab. Those artifacts expire after seven days and are not published releases.
 
+The executable deliberately leaves its bundled assemblies uncompressed to reduce RAM use while it runs. The download ZIP still compresses the executable. This trades a larger installed file for lower resident and private memory, without changing notification timing or verified artwork matching.
+
 ### Tray and startup controls
 
 The tray menu contains **Show current track**, **Settings**, **About**, and **Exit**. Launching a second copy shows an "Already running" notification instead of creating another instance.
@@ -79,12 +81,12 @@ From the repository root:
 Publish.cmd
 ```
 
-This produces a self-contained, compressed single-file x64 application in `publish\` and copies the executable beside the helper scripts. If the old executable is running and cannot be replaced, the script reports that failure; stop the app and rerun the command.
+This produces a self-contained, uncompressed single-file x64 application in `publish\` and copies the executable beside the helper scripts. If the old executable is running and cannot be replaced, the script reports that failure; stop the app and rerun the command.
 
 The equivalent publish command is:
 
 ```bat
-dotnet publish src\NowPlayingToast.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o publish
+dotnet publish src\NowPlayingToast.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 ```
 
 ## Troubleshooting

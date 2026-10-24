@@ -13,6 +13,9 @@
     <InformationalVersion>1.1.0</InformationalVersion>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Avoid retaining decompressed runtime assemblies in this long-running tray app.
+         The larger executable is compressed by the distributable ZIP instead. -->
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="app.ico" LogicalName="NowPlayingToast.app.ico" />

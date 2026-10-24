@@ -7,7 +7,7 @@ if errorlevel 1 (
 )
 
 echo Publishing NowPlayingToast with .NET 10...
-dotnet publish src\NowPlayingToast.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o publish
+dotnet publish src\NowPlayingToast.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 if errorlevel 1 (
   echo Publish failed. Check the output above and make sure the .NET 10 SDK is installed.
   popd
