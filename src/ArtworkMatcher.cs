@@ -9,30 +9,26 @@ internal static class ArtworkMatcher
     public static string? FindArtworkUrl(JsonElement results, string title, string artist, string album)
     {
         if (results.ValueKind != JsonValueKind.Array) return null;
-        var expectedTitle = Normalize(title);
-        var expectedArtist = Normalize(artist);
-        var expectedAlbum = Normalize(album);
+        var metadata = TrackMetadata.FromMediaFields(title, artist, album);
+        var expectedTitle = Normalize(metadata.Title);
+        var expectedArtist = Normalize(metadata.Artist);
+        var expectedAlbum = Normalize(metadata.Album);
         if (expectedTitle.Length == 0 || expectedArtist.Length == 0) return null;
 
-        string? bestUrl = null;
-        int bestScore = -1;
         foreach (var result in results.EnumerateArray())
         {
             if (result.ValueKind != JsonValueKind.Object) continue;
             if (Normalize(GetString(result, "trackName")) != expectedTitle ||
                 Normalize(GetString(result, "artistName")) != expectedArtist) continue;
+            if (expectedAlbum.Length > 0 && Normalize(GetString(result, "collectionName")) != expectedAlbum)
+                continue;
 
             var url = GetString(result, "artworkUrl100");
             if (!IsAllowedArtworkUrl(url)) continue;
 
-            var score = expectedAlbum.Length > 0 && Normalize(GetString(result, "collectionName")) == expectedAlbum ? 1 : 0;
-            if (score > bestScore)
-            {
-                bestScore = score;
-                bestUrl = url;
-            }
+            return url;
         }
-        return bestUrl;
+        return null;
     }
 
     public static bool IsAllowedArtworkUrl(string? url)

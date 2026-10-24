@@ -6,6 +6,34 @@ namespace NowPlayingToast;
 public sealed class ArtworkMatcherTests
 {
     [Fact]
+    public void MatchesAppleMusicCombinedArtistAndAlbumMetadata()
+    {
+        using var document = JsonDocument.Parse("""
+            [{"trackName":"Real Friends","artistName":"Kanye West","collectionName":"The Life of Pablo","artworkUrl100":"https://is1-ssl.mzstatic.com/pablo.jpg"}]
+            """);
+        Assert.Equal("https://is1-ssl.mzstatic.com/pablo.jpg",
+            ArtworkMatcher.FindArtworkUrl(document.RootElement, "Real Friends", "Kanye West — The Life of Pablo", ""));
+    }
+
+    [Fact]
+    public void DoesNotReplaceAlbumCoverWithAnotherAlbumsCopyOfTheSong()
+    {
+        using var document = JsonDocument.Parse("""
+            [{"trackName":"Home","artistName":"Artist","collectionName":"Greatest Hits","artworkUrl100":"https://is1-ssl.mzstatic.com/wrong-album.jpg"}]
+            """);
+        Assert.Null(ArtworkMatcher.FindArtworkUrl(document.RootElement, "Home", "Artist", "Original Album"));
+    }
+
+    [Fact]
+    public void RejectsPreviousSongsArtworkWhenWindowsHasAdvancedItsTitle()
+    {
+        using var document = JsonDocument.Parse("""
+            [{"trackName":"Clique","artistName":"Kanye West, JAY-Z & Big Sean","collectionName":"Cruel Summer","artworkUrl100":"https://is1-ssl.mzstatic.com/previous.jpg"}]
+            """);
+        Assert.Null(ArtworkMatcher.FindArtworkUrl(document.RootElement, "RIVER", "¥$, Kanye West & Ty Dolla $ign — VULTURES 2", ""));
+    }
+
+    [Fact]
     public void RejectsWrongArtistInsteadOfTakingFirstSearchResult()
     {
         using var document = JsonDocument.Parse("""

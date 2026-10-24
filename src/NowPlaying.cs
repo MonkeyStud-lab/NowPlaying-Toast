@@ -4,7 +4,6 @@ using System.Net;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Windows.Media.Control;
-using Windows.Storage.Streams;
 
 namespace NowPlayingToast;
 
@@ -15,7 +14,6 @@ internal sealed class NowPlayingInfo
     public string Album { get; init; } = "";
     public string App { get; init; } = "";
     public string SourceAppUserModelId { get; init; } = "";
-    public IRandomAccessStreamReference? Thumbnail { get; init; }
     public Image? Art { get; set; }
     public string Key => JsonSerializer.Serialize(new[] { SourceAppUserModelId, Title, Artist, Album });
 }
@@ -64,19 +62,16 @@ internal static class NowPlaying
 
         var properties = await session.TryGetMediaPropertiesAsync().AsTask(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        var title = (properties.Title ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(title)) return null;
+        var metadata = TrackMetadata.FromMediaFields(properties.Title, properties.Artist, properties.AlbumTitle);
+        if (string.IsNullOrWhiteSpace(metadata.Title)) return null;
 
-        // Keep the artwork reference from this exact metadata snapshot. Re-reading
-        // the session later could pair the old title with the next song's artwork.
         return new NowPlayingInfo
         {
-            Title = title,
-            Artist = (properties.Artist ?? "").Trim(),
-            Album = (properties.AlbumTitle ?? "").Trim(),
+            Title = metadata.Title,
+            Artist = metadata.Artist,
+            Album = metadata.Album,
             App = "Apple Music",
-            SourceAppUserModelId = aumid,
-            Thumbnail = properties.Thumbnail
+            SourceAppUserModelId = aumid
         };
     }
 
@@ -89,25 +84,10 @@ internal static class NowPlaying
 
         try
         {
-            if (info.Thumbnail is not null)
-            {
-                try
-                {
-                    using var stream = await info.Thumbnail.OpenReadAsync().AsTask(token);
-                    var bytes = await ReadThumbnailAsync(stream, token);
-                    if (bytes is not null)
-                    {
-                        var thumbnail = await DecodeImageAsync(bytes, token);
-                        if (thumbnail is not null) return thumbnail;
-                    }
-                }
-                catch (Exception ex) when (IsArtworkError(ex))
-                {
-                    token.ThrowIfCancellationRequested();
-                    // A missing or malformed local image may still have a catalog match.
-                }
-            }
-
+            // Apple Music can expose the previous song's thumbnail alongside new
+            // metadata, even from one media-properties snapshot. That thumbnail
+            // has no track identity to validate. Use only catalog art matched to
+            // this captured title/artist/album; leave the placeholder otherwise.
             return await TryItunesArtworkAsync(info, token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -125,26 +105,6 @@ internal static class NowPlaying
     private static bool IsArtworkError(Exception error) => error is
         IOException or HttpRequestException or JsonException or ArgumentException or
         ExternalException or InvalidOperationException or NotSupportedException;
-
-    private static async Task<byte[]?> ReadThumbnailAsync(
-        IRandomAccessStreamWithContentType stream, CancellationToken cancellationToken)
-    {
-        if (stream.Size == 0 || stream.Size > MaxArtworkBytes) return null;
-        var size = (uint)stream.Size;
-        using var reader = new DataReader(stream);
-        try
-        {
-            if (await reader.LoadAsync(size).AsTask(cancellationToken) != size) return null;
-            var bytes = new byte[(int)size];
-            reader.ReadBytes(bytes);
-            return bytes;
-        }
-        finally
-        {
-            // The caller owns and disposes the WinRT stream.
-            reader.DetachStream();
-        }
-    }
 
     private static async Task<Image?> DecodeImageAsync(byte[] bytes, CancellationToken cancellationToken)
     {
@@ -189,8 +149,8 @@ internal static class NowPlaying
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(info.Title) || string.IsNullOrWhiteSpace(info.Artist)) return null;
-        var query = Uri.EscapeDataString(info.Artist + " " + info.Title);
-        var searchUri = new Uri("https://itunes.apple.com/search?term=" + query + "&entity=song&limit=10&media=music");
+        var query = Uri.EscapeDataString(info.Artist + " " + info.Title + " " + info.Album);
+        var searchUri = new Uri("https://itunes.apple.com/search?term=" + query + "&entity=song&limit=25&media=music");
         var searchBytes = await GetBoundedBytesAsync(searchUri, MaxSearchBytes, cancellationToken);
         if (searchBytes is null) return null;
 
