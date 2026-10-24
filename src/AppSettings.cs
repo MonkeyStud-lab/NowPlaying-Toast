@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 
@@ -25,7 +26,7 @@ public enum ToastTheme
     Light
 }
 
-public sealed class AppSettings
+public sealed partial class AppSettings
 {
     public double HoldDurationSeconds { get; set; } = 4.2;
     public ToastCorner Corner { get; set; } = ToastCorner.BottomRight;
@@ -48,13 +49,15 @@ public sealed class AppSettings
 
     public static string SettingsPath => Path.Combine(SettingsDirectory, "settings.json");
 
-    public static AppSettings Load()
+    public static AppSettings Load() => LoadFrom(SettingsPath);
+
+    internal static AppSettings LoadFrom(string path)
     {
         try
         {
-            if (File.Exists(SettingsPath))
+            if (File.Exists(path))
             {
-                var json = File.ReadAllText(SettingsPath);
+                var json = File.ReadAllText(path);
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
                 if (loaded is not null)
                 {
@@ -63,24 +66,50 @@ public sealed class AppSettings
                 }
             }
         }
-        catch { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or System.Security.SecurityException)
+        {
+            // Keep unreadable or invalid files intact. Opening the app must not overwrite them.
+        }
 
-        var defaults = new AppSettings();
-        defaults.Save();
-        return defaults;
+        return new AppSettings();
     }
 
-    public void Save()
+    public void Save() => SaveTo(SettingsPath);
+
+    internal void SaveTo(string path)
     {
         Clamp();
-        Directory.CreateDirectory(SettingsDirectory);
-        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));
+        var json = JsonSerializer.Serialize(this, JsonOptions);
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath)!;
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            // Flush a complete file before replacing the previous settings on the same volume.
+            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                var bytes = new UTF8Encoding(false).GetBytes(json);
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, fullPath, overwrite: true);
+        }
+        finally
+        {
+            try { File.Delete(temporaryPath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
     }
+
+    public AppSettings Clone() => (AppSettings)MemberwiseClone();
 
     public void Clamp()
     {
-        if (HoldDurationSeconds < 1.0) HoldDurationSeconds = 1.0;
-        if (HoldDurationSeconds > 30.0) HoldDurationSeconds = 30.0;
+        HoldDurationSeconds = double.IsFinite(HoldDurationSeconds)
+            ? Math.Clamp(HoldDurationSeconds, 1.0, 30.0)
+            : 4.2;
         if (!Enum.IsDefined(Corner)) Corner = ToastCorner.BottomRight;
         if (!Enum.IsDefined(Size)) Size = ToastSize.Normal;
         if (!Enum.IsDefined(Theme)) Theme = ToastTheme.Dark;
@@ -94,13 +123,5 @@ public sealed class AppSettings
         ToastSize.Large => 1.2f,
         _ => 1.0f
     };
-
-    public Screen ResolveScreen()
-    {
-        var screens = Screen.AllScreens;
-        if (MonitorIndex >= 0 && MonitorIndex < screens.Length)
-            return screens[MonitorIndex];
-        return Screen.PrimaryScreen ?? screens[0];
-    }
 }
 

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Exercise the production logic without requiring a Windows desktop on every developer machine. -->
+    <Compile Include="../src/AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="../src/TrackRefreshQueue.cs" Link="TrackRefreshQueue.cs" />
+    <Compile Include="../src/TrackNotificationState.cs" Link="TrackNotificationState.cs" />
+    <Compile Include="../src/ArtworkMatcher.cs" Link="ArtworkMatcher.cs" />
+    <Compile Include="../src/TrackMetadata.cs" Link="TrackMetadata.cs" />
+  </ItemGroup>
+</Project>

@@ -1,4 +1,4 @@
-﻿namespace NowPlayingToast;
+namespace NowPlayingToast;
 
 internal sealed class SettingsForm : Form
 {
@@ -11,108 +11,157 @@ internal sealed class SettingsForm : Form
     private readonly ComboBox _theme;
     private readonly ComboBox _monitor;
     private readonly CheckBox _checkUpdates;
+    private readonly Label _saveError;
 
     public SettingsForm(AppSettings settings)
     {
-        _settings = settings;
+        // Edits stay local until the complete settings file has been saved successfully.
+        _settings = settings.Clone();
+        _settings.Clamp();
         Text = "Now Playing Toast - Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(420, 430);
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        Padding = new Padding(16);
         Font = new Font("Segoe UI", 9f);
 
-        var y = 16;
-        void AddLabel(string text)
+        var layout = new TableLayoutPanel
         {
-            Controls.Add(new Label { Text = text, Left = 16, Top = y, AutoSize = true });
-            y += 22;
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            Margin = Padding.Empty
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        Controls.Add(layout);
+
+        void AddField(string label, Control editor)
+        {
+            var row = layout.RowCount++;
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(new Label
+            {
+                Text = label,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 0, 16, 10)
+            }, 0, row);
+            editor.Margin = new Padding(0, 0, 0, 10);
+            editor.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            editor.AccessibleName = label;
+            layout.Controls.Add(editor, 1, row);
         }
 
-        AddLabel("Hold duration (seconds)");
+        void AddWideControl(Control control)
+        {
+            var row = layout.RowCount++;
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(control, 0, row);
+            layout.SetColumnSpan(control, 2);
+        }
+
+        ComboBox CreateChoice(string[] choices, string selection)
+        {
+            var combo = new ComboBox { Width = 240, DropDownStyle = ComboBoxStyle.DropDownList };
+            combo.Items.AddRange(choices);
+            combo.SelectedItem = selection;
+            return combo;
+        }
+
         _hold = new NumericUpDown
         {
-            Left = 16, Top = y, Width = 120,
-            DecimalPlaces = 1, Minimum = 1, Maximum = 30,
-            Increment = 0.1M, Value = (decimal)Math.Clamp(settings.HoldDurationSeconds, 1, 30)
+            Width = 240,
+            DecimalPlaces = 1,
+            Minimum = 1,
+            Maximum = 30,
+            Increment = 0.1M,
+            Value = (decimal)_settings.HoldDurationSeconds
         };
-        Controls.Add(_hold);
-        y += 36;
+        AddField("Hold duration (seconds)", _hold);
 
-        AddLabel("Corner");
-        _corner = new ComboBox { Left = 16, Top = y, Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
-        _corner.Items.AddRange(new object[] { "BottomRight", "BottomLeft", "TopRight", "TopLeft" });
-        _corner.SelectedItem = settings.Corner.ToString();
-        Controls.Add(_corner);
-        y += 36;
+        _corner = CreateChoice(Enum.GetNames<ToastCorner>(), _settings.Corner.ToString());
+        AddField("Corner", _corner);
+        _size = CreateChoice(Enum.GetNames<ToastSize>(), _settings.Size.ToString());
+        AddField("Size", _size);
+        _theme = CreateChoice(Enum.GetNames<ToastTheme>(), _settings.Theme.ToString());
+        AddField("Theme", _theme);
 
-        AddLabel("Size");
-        _size = new ComboBox { Left = 16, Top = y, Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
-        _size.Items.AddRange(new object[] { "Small", "Normal", "Large" });
-        _size.SelectedItem = settings.Size.ToString();
-        Controls.Add(_size);
-        y += 36;
-
-        AddLabel("Theme");
-        _theme = new ComboBox { Left = 16, Top = y, Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
-        _theme.Items.AddRange(new object[] { "Dark", "Light" });
-        _theme.SelectedItem = settings.Theme.ToString();
-        Controls.Add(_theme);
-        y += 36;
-
-        AddLabel("Monitor");
-        _monitor = new ComboBox { Left = 16, Top = y, Width = 380, DropDownStyle = ComboBoxStyle.DropDownList };
+        _monitor = new ComboBox { Width = 240, DropDownStyle = ComboBoxStyle.DropDownList };
         _monitor.Items.Add("Primary");
-        for (int i = 0; i < Screen.AllScreens.Length; i++)
+        var screens = Screen.AllScreens;
+        for (int i = 0; i < screens.Length; i++)
         {
-            var s = Screen.AllScreens[i];
-            var label = $"Screen {i}: {s.Bounds.Width}x{s.Bounds.Height}" + (s.Primary ? " (Primary)" : "");
-            _monitor.Items.Add(label);
+            var screen = screens[i];
+            _monitor.Items.Add($"Screen {i}: {screen.Bounds.Width}x{screen.Bounds.Height}" +
+                (screen.Primary ? " (Primary)" : ""));
         }
-        _monitor.SelectedIndex = settings.MonitorIndex < 0
-            ? 0
-            : Math.Min(settings.MonitorIndex + 1, _monitor.Items.Count - 1);
-        Controls.Add(_monitor);
-        y += 36;
+        _monitor.SelectedIndex = _settings.MonitorIndex >= 0 && _settings.MonitorIndex < screens.Length
+            ? _settings.MonitorIndex + 1
+            : 0;
+        AddField("Monitor", _monitor);
 
         _showOnActivate = new CheckBox
         {
-            Left = 16, Top = y, Width = 380, AutoSize = true,
+            AutoSize = true,
             Text = "Show toast when Apple Music activates",
-            Checked = settings.ShowOnAppleMusicActivate
+            Checked = _settings.ShowOnAppleMusicActivate,
+            Margin = new Padding(0, 4, 0, 8)
         };
-        Controls.Add(_showOnActivate);
-        y += 28;
-
+        AddWideControl(_showOnActivate);
         _playSound = new CheckBox
         {
-            Left = 16, Top = y, Width = 380, AutoSize = true,
+            AutoSize = true,
             Text = "Play sound on toast",
-            Checked = settings.PlaySoundOnToast
+            Checked = _settings.PlaySoundOnToast,
+            Margin = new Padding(0, 0, 0, 8)
         };
-        Controls.Add(_playSound);
-        y += 28;
-
+        AddWideControl(_playSound);
         _checkUpdates = new CheckBox
         {
-            Left = 16, Top = y, Width = 380, AutoSize = true,
+            AutoSize = true,
             Text = "Check for updates on startup",
-            Checked = settings.CheckForUpdatesOnStartup
+            Checked = _settings.CheckForUpdatesOnStartup,
+            Margin = new Padding(0, 0, 0, 12)
         };
-        Controls.Add(_checkUpdates);
-        y += 40;
+        AddWideControl(_checkUpdates);
 
-        var save = new Button { Text = "Save", Left = 220, Top = y, Width = 90, DialogResult = DialogResult.OK };
-        var cancel = new Button { Text = "Cancel", Left = 320, Top = y, Width = 90, DialogResult = DialogResult.Cancel };
-        save.Click += (_, _) => ApplyToSettings();
-        Controls.Add(save);
-        Controls.Add(cancel);
+        _saveError = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(410, 0),
+            ForeColor = Color.Firebrick,
+            Margin = new Padding(0, 0, 0, 12),
+            Visible = false
+        };
+        AddWideControl(_saveError);
+
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Margin = Padding.Empty
+        };
+        var cancel = new Button { Text = "Cancel", AutoSize = true, MinimumSize = new Size(90, 0), DialogResult = DialogResult.Cancel };
+        var save = new Button { Text = "Save", AutoSize = true, MinimumSize = new Size(90, 0) };
+        save.Click += (_, _) => SaveSettings();
+        buttons.Controls.Add(cancel);
+        buttons.Controls.Add(save);
+        AddWideControl(buttons);
         AcceptButton = save;
         CancelButton = cancel;
     }
 
-    private void ApplyToSettings()
+    private void SaveSettings()
     {
         _settings.HoldDurationSeconds = (double)_hold.Value;
         _settings.Corner = Enum.Parse<ToastCorner>(_corner.SelectedItem!.ToString()!);
@@ -122,7 +171,17 @@ internal sealed class SettingsForm : Form
         _settings.ShowOnAppleMusicActivate = _showOnActivate.Checked;
         _settings.PlaySoundOnToast = _playSound.Checked;
         _settings.CheckForUpdatesOnStartup = _checkUpdates.Checked;
-        _settings.Save();
+
+        try
+        {
+            _settings.Save();
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _saveError.Text = "Settings could not be saved. Your previous settings are unchanged.\n" + ex.Message;
+            _saveError.Visible = true;
+        }
     }
 }
-

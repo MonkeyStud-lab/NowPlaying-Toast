@@ -13,7 +13,10 @@ internal static class AppIcon
             var asm = Assembly.GetExecutingAssembly();
             using var stream = asm.GetManifestResourceStream("NowPlayingToast.app.ico");
             if (stream is not null)
-                return new Icon(stream);
+            {
+                using var icon = new Icon(stream);
+                return (Icon)icon.Clone();
+            }
         }
         catch { }
 
@@ -23,7 +26,8 @@ internal static class AppIcon
             using var ms = new MemoryStream();
             WriteMultiSizeIco(ms, new[] { RenderBitmap(16), RenderBitmap(32) });
             ms.Position = 0;
-            return new Icon(ms);
+            using var icon = new Icon(ms);
+            return (Icon)icon.Clone();
         }
         catch
         {
@@ -69,6 +73,19 @@ internal static class AppIcon
 
     private static void WriteMultiSizeIco(Stream stream, Bitmap[] bitmaps)
     {
+        try
+        {
+            WriteMultiSizeIcoData(stream, bitmaps);
+        }
+        finally
+        {
+            foreach (var bitmap in bitmaps)
+                bitmap.Dispose();
+        }
+    }
+
+    private static void WriteMultiSizeIcoData(Stream stream, Bitmap[] bitmaps)
+    {
         using var bw = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         bw.Write((short)0);
         bw.Write((short)1);
@@ -99,9 +116,6 @@ internal static class AppIcon
 
         foreach (var data in imageData)
             bw.Write(data);
-
-        foreach (var bmp in bitmaps)
-            bmp.Dispose();
     }
 
     private static GraphicsPath RoundRect(float x, float y, float w, float h, float r)
