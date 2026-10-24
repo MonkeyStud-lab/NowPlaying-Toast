@@ -1,0 +1,96 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore src/NowPlayingToast.csproj
+
+      - name: Build
+        run: dotnet build src/NowPlayingToast.csproj -c Release --no-restore
+
+      - name: Regression tests
+        run: dotnet test tests/NowPlayingToast.Tests.csproj -c Release
+
+      - name: Publish self-contained application
+        run: >-
+          dotnet publish src/NowPlayingToast.csproj -c Release -r win-x64
+          --self-contained true -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true -o publish
+
+      - name: Smoke-test startup, single instance, and graceful stop
+        shell: pwsh
+        run: |
+          $executable = (Resolve-Path 'publish/NowPlayingToast.exe').Path
+          $app = $duplicate = $stop = $null
+          try {
+            $app = Start-Process -FilePath $executable -PassThru
+            Start-Sleep -Seconds 3
+            if ($app.HasExited) { throw "Tray app exited during startup with code $($app.ExitCode)." }
+
+            $duplicate = Start-Process -FilePath $executable -PassThru
+            if (-not $duplicate.WaitForExit(5000)) { throw 'A second long-running instance was created.' }
+            if ($duplicate.ExitCode -ne 0) { throw "Second launch failed with code $($duplicate.ExitCode)." }
+
+            $stop = Start-Process -FilePath $executable -ArgumentList '--exit' -PassThru
+            if (-not $stop.WaitForExit(8000)) { throw 'The exit command did not finish.' }
+            if ($stop.ExitCode -ne 0) { throw "The exit command failed with code $($stop.ExitCode)." }
+            if (-not $app.WaitForExit(5000)) { throw 'The original tray app did not exit.' }
+            if ($app.ExitCode -ne 0) { throw "Tray app exited with code $($app.ExitCode)." }
+          }
+          finally {
+            # Only clean up processes started by this check, even when it fails.
+            foreach ($process in @($stop, $duplicate, $app)) {
+              if ($null -ne $process) {
+                try {
+                  if (-not $process.HasExited) {
+                    $process.Kill()
+                    $null = $process.WaitForExit(3000)
+                  }
+                }
+                catch { Write-Warning "Could not finish cleanup of smoke-test process: $_" }
+                finally { $process.Dispose() }
+              }
+            }
+          }
+
+      - name: Package portable build
+        shell: pwsh
+        run: |
+          $package = Join-Path $PWD 'artifacts/NowPlayingToast-win-x64'
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          Copy-Item -LiteralPath 'publish/NowPlayingToast.exe', 'README.md', 'Start-NowPlaying-Toast.cmd', 'Stop-NowPlaying-Toast.cmd', 'Add-To-Startup.cmd', 'Remove-From-Startup.cmd' -Destination $package
+          Compress-Archive -Path "$package/*" -DestinationPath 'artifacts/NowPlayingToast-win-x64.zip'
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: NowPlayingToast-win-x64
+          path: artifacts/NowPlayingToast-win-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

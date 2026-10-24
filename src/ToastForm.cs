@@ -17,6 +17,8 @@ internal sealed class ToastForm : Form
     private string _title = "";
     private string _artist = "";
     private string _app = "";
+    private string? _trackKey;
+    private bool _positioning;
 
     private enum Phase { Hidden, Opening, Holding, Closing }
     private Phase _phase = Phase.Hidden;
@@ -25,6 +27,8 @@ internal sealed class ToastForm : Form
     public ToastForm(AppSettings settings)
     {
         _settings = settings;
+        // The card is painted in device pixels, with DPI handled explicitly below.
+        AutoScaleMode = AutoScaleMode.None;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
@@ -53,6 +57,46 @@ internal sealed class ToastForm : Form
         Cursor = Cursors.Hand;
     }
 
+    protected override bool ShowWithoutActivation => true;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var parameters = base.CreateParams;
+            parameters.ExStyle |= NativeMethods.WS_EX_NOACTIVATE | NativeMethods.WS_EX_TOOLWINDOW;
+            return parameters;
+        }
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        if (message.Msg == NativeMethods.WM_MOUSEACTIVATE)
+        {
+            // Deliver the click, but never give the notification keyboard focus.
+            message.Result = new IntPtr(NativeMethods.MA_NOACTIVATE);
+            return;
+        }
+        base.WndProc(ref message);
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        ApplyLayoutFromSettings();
+        PositionToast();
+        Invalidate();
+    }
+
+    protected override bool OnGetDpiScaledSize(int deviceDpiOld, int deviceDpiNew, ref Size desiredSize)
+    {
+        var scale = _settings.SizeScale * deviceDpiNew / 96f;
+        desiredSize = new Size((int)(400 * scale), (int)(112 * scale));
+        return true;
+    }
+
+    private float PixelScale => _settings.SizeScale * DeviceDpi / 96f;
+
     public void ApplySettings(AppSettings settings)
     {
         _settings = settings;
@@ -64,14 +108,23 @@ internal sealed class ToastForm : Form
 
     private void ApplyLayoutFromSettings()
     {
-        float scale = _settings.SizeScale;
+        float scale = PixelScale;
         Size = new Size((int)(400 * scale), (int)(112 * scale));
         BackColor = CardBackground;
         var hrgn = NativeMethods.CreateRoundRectRgn(0, 0, Width + 1, Height + 1, (int)(18 * scale), (int)(18 * scale));
         if (hrgn != IntPtr.Zero)
         {
-            Region?.Dispose();
-            Region = Region.FromHrgn(hrgn);
+            try
+            {
+                var oldRegion = Region;
+                Region = Region.FromHrgn(hrgn);
+                oldRegion?.Dispose();
+            }
+            finally
+            {
+                // Region.FromHrgn copies the native region; it does not own hrgn.
+                NativeMethods.DeleteObject(hrgn);
+            }
         }
         if (_hold is not null)
             _hold.Interval = Math.Max(500, (int)(_settings.HoldDurationSeconds * 1000));
@@ -94,6 +147,7 @@ internal sealed class ToastForm : Form
         _hold.Stop();
         _anim.Stop();
         _phase = Phase.Hidden;
+        _trackKey = null;
         Opacity = 1;
         Hide();
     }
@@ -103,6 +157,7 @@ internal sealed class ToastForm : Form
         _title = title;
         _artist = body;
         _app = "Now Playing Toast";
+        _trackKey = null;
         _art?.Dispose();
         _art = null;
         BeginShow();
@@ -113,10 +168,27 @@ internal sealed class ToastForm : Form
         _title = np.Title;
         _artist = string.IsNullOrWhiteSpace(np.Artist) ? np.Album : np.Artist;
         _app = np.App;
-        _art?.Dispose();
-        _art = np.Art is null ? null : new Bitmap(np.Art);
-        np.Art?.Dispose();
+        _trackKey = np.Key;
+        ReplaceArtwork(np.Art);
         BeginShow();
+    }
+
+    public void UpdateArtwork(string trackKey, Image? artwork)
+    {
+        // A delayed download must not revive a hidden card or replace a newer song.
+        if (!Visible || _phase == Phase.Hidden || !string.Equals(_trackKey, trackKey, StringComparison.Ordinal))
+            return;
+
+        ReplaceArtwork(artwork);
+        Invalidate();
+    }
+
+    private void ReplaceArtwork(Image? artwork)
+    {
+        // The caller retains its image. The card owns only this independent copy.
+        var replacement = artwork is null ? null : new Bitmap(artwork);
+        _art?.Dispose();
+        _art = replacement;
     }
 
     private void BeginShow()
@@ -130,8 +202,11 @@ internal sealed class ToastForm : Form
         Opacity = 0;
 
         if (!Visible) Show();
-        NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST, Left, Top, Width, Height, 0x0040);
-        BringToFront();
+        // Creating the window can change DeviceDpi on the selected monitor.
+        ApplyLayoutFromSettings();
+        PositionToast();
+        NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST, Left, Top, Width, Height,
+            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
         _anim.Start();
         Invalidate();
 
@@ -143,26 +218,28 @@ internal sealed class ToastForm : Form
 
     private void PositionToast()
     {
-        var wa = _settings.ResolveScreen().WorkingArea;
-        int margin = 18;
-        switch (_settings.Corner)
+        if (_positioning) return;
+        _positioning = true;
+        try
         {
-            case ToastCorner.BottomLeft:
-                Left = wa.Left + margin;
-                Top = wa.Bottom - Height - margin;
-                break;
-            case ToastCorner.TopRight:
-                Left = wa.Right - Width - margin;
-                Top = wa.Top + margin;
-                break;
-            case ToastCorner.TopLeft:
-                Left = wa.Left + margin;
-                Top = wa.Top + margin;
-                break;
-            default:
-                Left = wa.Right - Width - margin;
-                Top = wa.Bottom - Height - margin;
-                break;
+            // A monitor move can synchronously change DPI and size. Recalculate
+            // the corner once more after that move, without recursive positioning.
+            for (var pass = 0; pass < 2; pass++)
+            {
+                var wa = _settings.ResolveScreen().WorkingArea;
+                int margin = Math.Max(1, (int)(18 * DeviceDpi / 96f));
+                bool left = _settings.Corner is ToastCorner.BottomLeft or ToastCorner.TopLeft;
+                bool top = _settings.Corner is ToastCorner.TopLeft or ToastCorner.TopRight;
+                var x = left ? wa.Left + margin : wa.Right - Width - margin;
+                var y = top ? wa.Top + margin : wa.Bottom - Height - margin;
+                Location = new Point(
+                    Math.Clamp(x, wa.Left, Math.Max(wa.Left, wa.Right - Width)),
+                    Math.Clamp(y, wa.Top, Math.Max(wa.Top, wa.Bottom - Height)));
+            }
+        }
+        finally
+        {
+            _positioning = false;
         }
     }
 
@@ -191,6 +268,7 @@ internal sealed class ToastForm : Form
             if (_t <= 0f)
             {
                 _phase = Phase.Hidden;
+                _trackKey = null;
                 _anim.Stop();
                 Opacity = 1;
                 Hide();
@@ -204,7 +282,7 @@ internal sealed class ToastForm : Form
 
     private void Render(Graphics g)
     {
-        float scale = _settings.SizeScale;
+        float scale = PixelScale;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
         g.Clear(CardBackground);
@@ -223,31 +301,41 @@ internal sealed class ToastForm : Form
         var artRect = new Rectangle(artX, artY, artSize, artSize);
         using (var artPath = RoundRect(artX, artY, artSize, artSize, (int)(10 * scale)))
         {
-            var old = g.Clip;
-            g.SetClip(artPath);
-            if (_art is not null)
-                g.DrawImage(_art, artRect);
-            else
+            var state = g.Save();
+            try
             {
-                using var bg = new SolidBrush(ArtPlaceholder);
-                g.FillRectangle(bg, artRect);
+                g.SetClip(artPath);
+                using var background = new SolidBrush(ArtPlaceholder);
+                g.FillRectangle(background, artRect);
+                if (_art is not null)
+                {
+                    var fit = Math.Min((float)artSize / _art.Width, (float)artSize / _art.Height);
+                    var artworkWidth = _art.Width * fit;
+                    var artworkHeight = _art.Height * fit;
+                    g.DrawImage(_art, new RectangleF(artX + (artSize - artworkWidth) / 2,
+                        artY + (artSize - artworkHeight) / 2, artworkWidth, artworkHeight));
+                }
             }
-            g.Clip = old;
-            using var artBorder = new Pen(Color.FromArgb(60, AppleRed), 1f);
+            finally
+            {
+                g.Restore(state);
+            }
+            using var artBorder = new Pen(Color.FromArgb(60, AppleRed), scale);
             g.DrawPath(artBorder, artPath);
         }
 
         int textX = artX + artSize + (int)(14 * scale);
         int textW = Width - textX - (int)(16 * scale);
 
-        using var titleFont = new Font("Segoe UI Semibold", 12f * scale);
-        using var artistFont = new Font("Segoe UI", 10f * scale);
-        using var appFont = new Font("Segoe UI", 8.5f * scale);
+        // Font sizes are points; GDI+ already applies the display DPI to them.
+        using var titleFont = new Font("Segoe UI Semibold", 12f * _settings.SizeScale);
+        using var artistFont = new Font("Segoe UI", 10f * _settings.SizeScale);
+        using var appFont = new Font("Segoe UI", 8.5f * _settings.SizeScale);
         using var titleBrush = new SolidBrush(TitleColor);
         using var artistBrush = new SolidBrush(ArtistColor);
         using var appBrush = new SolidBrush(AppleRed);
 
-        var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+        using var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
         g.DrawString(_title, titleFont, titleBrush, new RectangleF(textX, 20 * scale, textW, 28 * scale), sf);
         g.DrawString(_artist, artistFont, artistBrush, new RectangleF(textX, 48 * scale, textW, 22 * scale), sf);
         g.DrawString(_app, appFont, appBrush, new RectangleF(textX, 74 * scale, textW, 18 * scale), sf);

@@ -6,10 +6,20 @@ namespace NowPlayingToast;
 internal static class NativeMethods
 {
     public const int SW_RESTORE = 9;
+    public const int WS_EX_NOACTIVATE = 0x08000000;
+    public const int WS_EX_TOOLWINDOW = 0x00000080;
+    public const int WM_MOUSEACTIVATE = 0x0021;
+    public const int MA_NOACTIVATE = 3;
+    public const uint SWP_NOACTIVATE = 0x0010;
+    public const uint SWP_SHOWWINDOW = 0x0040;
     public static readonly IntPtr HWND_TOPMOST = new(-1);
 
     [DllImport("gdi32.dll")]
     public static extern IntPtr CreateRoundRectRgn(int l, int t, int r, int b, int w, int h);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DeleteObject(IntPtr handle);
 
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -37,9 +47,11 @@ internal static class NativeMethods
 
     public static bool FocusAppleMusic()
     {
+        Process[] processes = Array.Empty<Process>();
         try
         {
-            foreach (var proc in Process.GetProcessesByName("AppleMusic"))
+            processes = Process.GetProcessesByName("AppleMusic");
+            foreach (var proc in processes)
             {
                 var hwnd = proc.MainWindowHandle;
                 if (hwnd == IntPtr.Zero) continue;
@@ -57,18 +69,23 @@ internal static class NativeMethods
                 try
                 {
                     ShowWindow(hwnd, SW_RESTORE);
-                    SetForegroundWindow(hwnd);
+                    if (SetForegroundWindow(hwnd))
+                        return true;
                 }
                 finally
                 {
                     if (attached)
                         AttachThreadInput(appThread, fgThread, false);
                 }
-
-                return true;
             }
         }
         catch { }
+        finally
+        {
+            // Dispose every result, including those after an early successful return.
+            foreach (var process in processes)
+                process.Dispose();
+        }
 
         return false;
     }

@@ -32,7 +32,7 @@ internal static class UpdateCheck
         return $"{v.Major}.{v.Minor}.{v.Build}";
     }
 
-    public static async Task<UpdateCheckResult> CheckAsync()
+    public static async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
     {
         try
         {
@@ -40,7 +40,7 @@ internal static class UpdateCheck
             http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("NowPlayingToast", GetDisplayVersion()));
             http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
-            var json = await http.GetStringAsync(ReleasesApi);
+            var json = await http.GetStringAsync(ReleasesApi, cancellationToken);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (!root.TryGetProperty("tag_name", out var tagEl))

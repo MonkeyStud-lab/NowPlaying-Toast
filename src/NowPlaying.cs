@@ -1,4 +1,8 @@
-﻿using System.Drawing.Drawing2D;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using Windows.Media.Control;
 using Windows.Storage.Streams;
 
@@ -6,34 +10,42 @@ namespace NowPlayingToast;
 
 internal sealed class NowPlayingInfo
 {
-    public string Title { get; set; } = "";
-    public string Artist { get; set; } = "";
-    public string Album { get; set; } = "";
-    public string App { get; set; } = "";
-    public string SourceAppUserModelId { get; set; } = "";
+    public string Title { get; init; } = "";
+    public string Artist { get; init; } = "";
+    public string Album { get; init; } = "";
+    public string App { get; init; } = "";
+    public string SourceAppUserModelId { get; init; } = "";
+    public IRandomAccessStreamReference? Thumbnail { get; init; }
     public Image? Art { get; set; }
-    public string Key => Title + "|" + Artist + "|" + Album;
+    public string Key => JsonSerializer.Serialize(new[] { SourceAppUserModelId, Title, Artist, Album });
 }
 
 internal static class NowPlaying
 {
+    private const int MaxArtworkBytes = 8_000_000;
+    private const int MaxSearchBytes = 256_000;
+    private const int MaxImageDimension = 4096;
+    private static readonly HttpClient ArtworkHttp = new(new HttpClientHandler { AllowAutoRedirect = false })
+    {
+        // One linked deadline covers the entire thumbnail/search/download operation.
+        Timeout = Timeout.InfiniteTimeSpan
+    };
+
     public static bool IsAppleMusicSession(string? sourceAppUserModelId)
     {
         if (string.IsNullOrWhiteSpace(sourceAppUserModelId))
             return false;
-        return sourceAppUserModelId.Contains("AppleMusic", StringComparison.OrdinalIgnoreCase)
-            || sourceAppUserModelId.Contains("AppleInc.AppleMusic", StringComparison.OrdinalIgnoreCase);
+        return sourceAppUserModelId.Contains("AppleMusic", StringComparison.OrdinalIgnoreCase);
     }
 
     public static GlobalSystemMediaTransportControlsSession? FindAppleMusicSession(
-        GlobalSystemMediaTransportControlsSessionManager mgr)
+        GlobalSystemMediaTransportControlsSessionManager manager)
     {
-        // Prefer current session only if it is Apple Music; otherwise scan all sessions.
-        var current = mgr.GetCurrentSession();
+        var current = manager.GetCurrentSession();
         if (current is not null && IsAppleMusicSession(current.SourceAppUserModelId))
             return current;
 
-        foreach (var session in mgr.GetSessions())
+        foreach (var session in manager.GetSessions())
         {
             if (IsAppleMusicSession(session.SourceAppUserModelId))
                 return session;
@@ -42,105 +54,185 @@ internal static class NowPlaying
         return null;
     }
 
-    public static async Task<NowPlayingInfo?> GetAsync(
-        GlobalSystemMediaTransportControlsSessionManager? existingMgr,
-        bool includeArt)
+    public static async Task<NowPlayingInfo?> ReadAsync(
+        GlobalSystemMediaTransportControlsSession session,
+        CancellationToken cancellationToken)
     {
-        var mgr = existingMgr ?? await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
-        var session = FindAppleMusicSession(mgr);
-        if (session is null) return null;
+        cancellationToken.ThrowIfCancellationRequested();
+        var aumid = session.SourceAppUserModelId ?? "";
+        if (!IsAppleMusicSession(aumid)) return null;
 
-        var props = await session.TryGetMediaPropertiesAsync();
-        var title = (props.Title ?? "").Trim();
+        var properties = await session.TryGetMediaPropertiesAsync().AsTask(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var title = (properties.Title ?? "").Trim();
         if (string.IsNullOrWhiteSpace(title)) return null;
 
-        var artist = (props.Artist ?? "").Trim();
-        var album = (props.AlbumTitle ?? "").Trim();
-        var aumid = session.SourceAppUserModelId ?? "";
-
-        Image? art = null;
-        if (includeArt)
-        {
-            try
-            {
-                if (props.Thumbnail is not null)
-                {
-                    using var ras = await props.Thumbnail.OpenReadAsync();
-                    art = await DecodeImageAsync(ras);
-                }
-            }
-            catch { }
-
-            if (art is null)
-                art = await TryItunesArtAsync(title, artist);
-        }
-
+        // Keep the artwork reference from this exact metadata snapshot. Re-reading
+        // the session later could pair the old title with the next song's artwork.
         return new NowPlayingInfo
         {
             Title = title,
-            Artist = artist,
-            Album = album,
+            Artist = (properties.Artist ?? "").Trim(),
+            Album = (properties.AlbumTitle ?? "").Trim(),
             App = "Apple Music",
             SourceAppUserModelId = aumid,
-            Art = art
+            Thumbnail = properties.Thumbnail
         };
     }
 
-    private static async Task<Image?> DecodeImageAsync(IRandomAccessStreamWithContentType stream)
+    public static async Task<Image?> GetArtworkAsync(NowPlayingInfo info, CancellationToken cancellationToken)
     {
-        var size = (int)stream.Size;
-        if (size <= 0 || size > 8_000_000) return null;
-        var reader = new DataReader(stream);
-        await reader.LoadAsync((uint)size);
-        var bytes = new byte[size];
-        reader.ReadBytes(bytes);
-        reader.Dispose();
-        using var ms = new MemoryStream(bytes);
-        using var img = Image.FromStream(ms);
-        var bmp = new Bitmap(img);
-        if (bmp.Width > 300 || bmp.Height > 300)
-        {
-            var scaled = new Bitmap(300, 300);
-            using (var g = Graphics.FromImage(scaled))
-            {
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(bmp, 0, 0, 300, 300);
-            }
-            bmp.Dispose();
-            return scaled;
-        }
-        return bmp;
-    }
+        cancellationToken.ThrowIfCancellationRequested();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+        var token = deadline.Token;
 
-    private static async Task<Image?> TryItunesArtAsync(string title, string artist)
-    {
         try
         {
-            var artistClean = artist.Contains(" - ", StringComparison.Ordinal)
-                ? artist.Split(new[] { " - " }, 2, StringSplitOptions.None)[0]
-                : artist;
-            var titleClean = title.Replace("/", " ").Replace("(feat.", " ").Replace("(Feat.", " ").Replace(")", " ");
-            var queries = new[] { artistClean + " " + titleClean, artistClean + " " + title.Split('(')[0], titleClean };
-
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            foreach (var q in queries)
+            if (info.Thumbnail is not null)
             {
-                var url = "https://itunes.apple.com/search?term=" + Uri.EscapeDataString(q.Trim()) +
-                          "&entity=song&limit=3&media=music";
-                var json = await http.GetStringAsync(url);
-                using var doc = System.Text.Json.JsonDocument.Parse(json);
-                if (!doc.RootElement.TryGetProperty("results", out var results) || results.GetArrayLength() == 0)
-                    continue;
-                var artUrl = results[0].GetProperty("artworkUrl100").GetString();
-                if (string.IsNullOrEmpty(artUrl)) continue;
-                artUrl = artUrl.Replace("100x100bb", "300x300bb");
-                var bytes = await http.GetByteArrayAsync(artUrl);
-                using var ms = new MemoryStream(bytes);
-                using var img = Image.FromStream(ms);
-                return new Bitmap(img);
+                try
+                {
+                    using var stream = await info.Thumbnail.OpenReadAsync().AsTask(token);
+                    var bytes = await ReadThumbnailAsync(stream, token);
+                    if (bytes is not null)
+                    {
+                        var thumbnail = await DecodeImageAsync(bytes, token);
+                        if (thumbnail is not null) return thumbnail;
+                    }
+                }
+                catch (Exception ex) when (IsArtworkError(ex))
+                {
+                    token.ThrowIfCancellationRequested();
+                    // A missing or malformed local image may still have a catalog match.
+                }
             }
+
+            return await TryItunesArtworkAsync(info, token);
         }
-        catch { }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // An artwork timeout is optional; cancellation by the caller propagates.
+            return null;
+        }
+        catch (Exception ex) when (IsArtworkError(ex))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return null;
+        }
+    }
+
+    private static bool IsArtworkError(Exception error) => error is
+        IOException or HttpRequestException or JsonException or ArgumentException or
+        ExternalException or InvalidOperationException or NotSupportedException;
+
+    private static async Task<byte[]?> ReadThumbnailAsync(
+        IRandomAccessStreamWithContentType stream, CancellationToken cancellationToken)
+    {
+        if (stream.Size == 0 || stream.Size > MaxArtworkBytes) return null;
+        var size = (uint)stream.Size;
+        using var reader = new DataReader(stream);
+        try
+        {
+            if (await reader.LoadAsync(size).AsTask(cancellationToken) != size) return null;
+            var bytes = new byte[(int)size];
+            reader.ReadBytes(bytes);
+            return bytes;
+        }
+        finally
+        {
+            // The caller owns and disposes the WinRT stream.
+            reader.DetachStream();
+        }
+    }
+
+    private static async Task<Image?> DecodeImageAsync(byte[] bytes, CancellationToken cancellationToken)
+    {
+        // GDI+ decoding is synchronous; keep it off the tray app's UI thread.
+        var image = await Task.Run(() => DecodeImage(bytes), cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            image?.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        return image;
+    }
+
+    private static Image? DecodeImage(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var image = Image.FromStream(stream, useEmbeddedColorManagement: false, validateImageData: true);
+        if (image.Width <= 0 || image.Height <= 0 || image.Width > MaxImageDimension || image.Height > MaxImageDimension)
+            return null;
+
+        var scale = Math.Min(1d, 300d / Math.Max(image.Width, image.Height));
+        var width = Math.Max(1, (int)Math.Round(image.Width * scale));
+        var height = Math.Max(1, (int)Math.Round(image.Height * scale));
+        var bitmap = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+        try
+        {
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.DrawImage(image, new Rectangle(0, 0, width, height), 0, 0,
+                image.Width, image.Height, GraphicsUnit.Pixel);
+            return bitmap;
+        }
+        catch
+        {
+            bitmap.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task<Image?> TryItunesArtworkAsync(NowPlayingInfo info, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(info.Title) || string.IsNullOrWhiteSpace(info.Artist)) return null;
+        var query = Uri.EscapeDataString(info.Artist + " " + info.Title);
+        var searchUri = new Uri("https://itunes.apple.com/search?term=" + query + "&entity=song&limit=10&media=music");
+        var searchBytes = await GetBoundedBytesAsync(searchUri, MaxSearchBytes, cancellationToken);
+        if (searchBytes is null) return null;
+
+        using var document = JsonDocument.Parse(searchBytes);
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            !document.RootElement.TryGetProperty("results", out var results)) return null;
+
+        var url = ArtworkMatcher.FindArtworkUrl(results, info.Title, info.Artist, info.Album);
+        if (url is null) return null;
+        var artworkUri = new Uri(url.Replace("100x100bb", "300x300bb", StringComparison.Ordinal));
+        var artworkBytes = await GetBoundedBytesAsync(artworkUri, MaxArtworkBytes, cancellationToken);
+        return artworkBytes is null ? null : await DecodeImageAsync(artworkBytes, cancellationToken);
+    }
+
+    private static async Task<byte[]?> GetBoundedBytesAsync(Uri uri, int limit, CancellationToken cancellationToken)
+    {
+        // Validate every redirect as well as the original URL before sending it.
+        for (var redirect = 0; redirect <= 3; redirect++)
+        {
+            if (!ArtworkMatcher.IsAllowedArtworkUrl(uri.AbsoluteUri)) return null;
+            using var response = await ArtworkHttp.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (response.StatusCode is HttpStatusCode.MovedPermanently or HttpStatusCode.Redirect or
+                HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect)
+            {
+                var location = response.Headers.Location;
+                if (location is null) return null;
+                uri = location.IsAbsoluteUri ? location : new Uri(uri, location);
+                continue;
+            }
+            if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > limit) return null;
+
+            using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[16_384];
+            int count;
+            while ((count = await body.ReadAsync(chunk.AsMemory(), cancellationToken)) != 0)
+            {
+                if (buffer.Length + count > limit) return null;
+                buffer.Write(chunk, 0, count);
+            }
+            return buffer.Length == 0 ? null : buffer.ToArray();
+        }
         return null;
     }
 }

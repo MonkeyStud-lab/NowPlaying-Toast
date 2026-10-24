@@ -1,7 +1,9 @@
 ﻿# Build
-src/bin/
-src/obj/
+**/bin/
+**/obj/
 publish/
+artifacts/
+TestResults/
 *.user
 *.suo
 
@@ -21,6 +23,7 @@ WinRT.Runtime.dll
 !Start-NowPlaying-Toast.cmd
 !Stop-NowPlaying-Toast.cmd
 !Add-To-Startup.cmd
+!Remove-From-Startup.cmd
 !Publish.cmd
 
 # Local leftovers
