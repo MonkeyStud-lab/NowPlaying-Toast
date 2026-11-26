@@ -2,6 +2,9 @@ namespace NowPlayingToast;
 
 internal sealed record TrackMetadata(string Title, string Artist, string Album)
 {
+    public static bool IsAppleMusicSource(string? appId) =>
+        string.Equals(appId, "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App", StringComparison.OrdinalIgnoreCase);
+
     public static TrackMetadata FromMediaFields(string? title, string? artist, string? album)
     {
         var trackTitle = (title ?? "").Trim();

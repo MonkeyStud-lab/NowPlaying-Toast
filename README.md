@@ -49,7 +49,7 @@ Settings are stored at `%AppData%\NowPlayingToast\settings.json`.
 | --- | --- | --- |
 | Hold duration | 4.2 s | How long the card stays visible |
 | Corner | BottomRight | BottomRight / BottomLeft / TopRight / TopLeft |
-| Size | Normal | Small / Normal / Large |
+| Size | Normal | At 100% display scaling: Small 272 × 68, Normal 320 × 80, Large 384 × 96 |
 | Theme | Dark | Dark / Light; both keep the red accent |
 | Monitor | Primary | Primary or a specific screen index |
 | Show on Apple Music activate | true | Show the current track when Apple Music opens |

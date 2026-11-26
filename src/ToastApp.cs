@@ -52,9 +52,13 @@ internal sealed class ToastApp : ApplicationContext
         _exitWait = ThreadPool.RegisterWaitForSingleObject(exitEvent,
             (_, _) => Post(ExitThread), null, Timeout.Infinite, executeOnlyOnce: true);
 
-        // Retry only if Windows' media-session service is temporarily unavailable.
+        // Retry only while the manager or a session subscription is unavailable.
         _managerRetry = new System.Windows.Forms.Timer { Interval = 5000 };
-        _managerRetry.Tick += (_, _) => _ = InitializeMediaAsync();
+        _managerRetry.Tick += (_, _) =>
+        {
+            if (_mgr is null) _ = InitializeMediaAsync();
+            else UpdateSession();
+        };
         Post(() => _ = InitializeMediaAsync());
         if (_settings.CheckForUpdatesOnStartup)
             Post(() => _ = RunUpdateCheckAsync());
@@ -82,7 +86,6 @@ internal sealed class ToastApp : ApplicationContext
                 throw;
             }
             _mgr = manager;
-            _managerRetry.Stop();
             UpdateSession();
         }
         catch (OperationCanceledException) when (_exiting) { }
@@ -106,25 +109,38 @@ internal sealed class ToastApp : ApplicationContext
         try
         {
             var next = NowPlaying.FindAppleMusicSession(_mgr);
+            _managerRetry.Stop();
             if (Equals(next, _session))
             {
                 if (next is not null) _ = _refreshQueue.RequestAsync();
                 return;
             }
             DetachSession();
-            _session = next;
-            if (_session is null)
+            if (next is null)
             {
                 _tray.Text = "Now Playing Toast - waiting for Apple Music";
                 _form.HideImmediate();
                 return;
             }
-            _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
-            _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
+            next.MediaPropertiesChanged += OnMediaPropertiesChanged;
+            try
+            {
+                next.PlaybackInfoChanged += OnPlaybackInfoChanged;
+            }
+            catch
+            {
+                next.MediaPropertiesChanged -= OnMediaPropertiesChanged;
+                throw;
+            }
+            _session = next;
             _tray.Text = "Now Playing Toast";
             _ = _refreshQueue.RequestAsync();
         }
-        catch (Exception ex) { AppLog.Write("Select Apple Music session", ex); }
+        catch (Exception ex)
+        {
+            AppLog.Write("Select Apple Music session", ex);
+            _managerRetry.Start();
+        }
     }
 
     private void DetachSession()
@@ -157,7 +173,7 @@ internal sealed class ToastApp : ApplicationContext
         var generation = _sessionGeneration;
         if (session is null)
         {
-            if (forceShow) _form.ShowMessage("Waiting for Apple Music", "Open Apple Music, then try again.");
+            if (forceShow) _form.ShowMessage("Waiting for Apple Music", "Open Apple Music to continue.");
             return;
         }
 
@@ -171,16 +187,14 @@ internal sealed class ToastApp : ApplicationContext
             if (info is null)
             {
                 _trackState.Observe(null, _settings.ShowOnAppleMusicActivate);
-                if (forceShow) _form.ShowMessage("Nothing playing", "Start a song in Apple Music, then try again.");
+                if (forceShow) _form.ShowMessage("Nothing playing", "Play a song in Apple Music.");
                 return;
             }
-            if (!NowPlaying.IsAppleMusicSession(info.SourceAppUserModelId)) return;
             if (!_trackState.Observe(info.Key, _settings.ShowOnAppleMusicActivate, forceShow)) return;
 
             CancelArtwork();
             // Do not delay the title or subsequent track events while artwork is loading.
-            try { _form.ShowTrack(info); }
-            finally { info.Art?.Dispose(); }
+            _form.ShowTrack(info);
             _artworkRequest = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
             _ = LoadArtworkAsync(info, generation, _artworkRequest);
         }
@@ -189,7 +203,7 @@ internal sealed class ToastApp : ApplicationContext
         {
             AppLog.Write("Read Apple Music metadata", ex);
             if (forceShow && !_exiting && generation == _sessionGeneration)
-                _form.ShowMessage("Track unavailable", "Apple Music is updating. Please try again.");
+                _form.ShowMessage("Track unavailable", "Try again in a moment.");
         }
     }
 
@@ -247,7 +261,7 @@ internal sealed class ToastApp : ApplicationContext
         _updateNote = result.Message;
         if (result.UpdateAvailable)
         {
-            _balloonUrl = result.ReleaseUrl ?? UpdateCheck.GitHubUrl + "/releases";
+            _balloonUrl = UpdateCheck.GitHubUrl + "/releases/latest";
             _tray.ShowBalloonTip(5000, "Update available", result.Message + "\nClick to view the release.", ToolTipIcon.Info);
         }
     }

@@ -68,7 +68,6 @@ internal static class NativeMethods
 
                 try
                 {
-                    ShowWindow(hwnd, SW_RESTORE);
                     if (SetForegroundWindow(hwnd))
                         return true;
                 }

@@ -5,6 +5,15 @@ namespace NowPlayingToast;
 public sealed class TrackMetadataTests
 {
     [Theory]
+    [InlineData("AppleInc.AppleMusicWin_nzyj5cx40ttqa!App", true)]
+    [InlineData("appleinc.applemusicwin_nzyj5cx40ttqa!app", true)]
+    [InlineData("Other.AppleMusicPlayer", false)]
+    [InlineData("AppleInc.AppleMusicWin_nzyj5cx40ttqa!Other", false)]
+    [InlineData(null, false)]
+    public void RecognizesOnlyTheRegisteredAppleMusicSource(string? appId, bool expected)
+        => Assert.Equal(expected, TrackMetadata.IsAppleMusicSource(appId));
+
+    [Theory]
     [InlineData("Kanye West — Graduation", "", "Kanye West", "Graduation")]
     [InlineData("Kanye West — Graduation", "Graduation", "Kanye West", "Graduation")]
     [InlineData("Artist — Duo", "Album", "Artist — Duo", "Album")]

@@ -14,7 +14,6 @@ internal sealed class NowPlayingInfo
     public string Album { get; init; } = "";
     public string App { get; init; } = "";
     public string SourceAppUserModelId { get; init; } = "";
-    public Image? Art { get; set; }
     public string Key => JsonSerializer.Serialize(new[] { SourceAppUserModelId, Title, Artist, Album });
 }
 
@@ -29,23 +28,16 @@ internal static class NowPlaying
         Timeout = Timeout.InfiniteTimeSpan
     };
 
-    public static bool IsAppleMusicSession(string? sourceAppUserModelId)
-    {
-        if (string.IsNullOrWhiteSpace(sourceAppUserModelId))
-            return false;
-        return sourceAppUserModelId.Contains("AppleMusic", StringComparison.OrdinalIgnoreCase);
-    }
-
     public static GlobalSystemMediaTransportControlsSession? FindAppleMusicSession(
         GlobalSystemMediaTransportControlsSessionManager manager)
     {
         var current = manager.GetCurrentSession();
-        if (current is not null && IsAppleMusicSession(current.SourceAppUserModelId))
+        if (current is not null && TrackMetadata.IsAppleMusicSource(current.SourceAppUserModelId))
             return current;
 
         foreach (var session in manager.GetSessions())
         {
-            if (IsAppleMusicSession(session.SourceAppUserModelId))
+            if (TrackMetadata.IsAppleMusicSource(session.SourceAppUserModelId))
                 return session;
         }
 
@@ -58,7 +50,7 @@ internal static class NowPlaying
     {
         cancellationToken.ThrowIfCancellationRequested();
         var aumid = session.SourceAppUserModelId ?? "";
-        if (!IsAppleMusicSession(aumid)) return null;
+        if (!TrackMetadata.IsAppleMusicSource(aumid)) return null;
 
         var properties = await session.TryGetMediaPropertiesAsync().AsTask(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
