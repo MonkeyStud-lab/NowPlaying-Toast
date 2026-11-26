@@ -67,7 +67,8 @@ internal static class NowPlaying
         };
     }
 
-    public static async Task<Image?> GetArtworkAsync(NowPlayingInfo info, CancellationToken cancellationToken)
+    public static async Task<Image?> GetArtworkAsync(GlobalSystemMediaTransportControlsSession session,
+        NowPlayingInfo info, SessionArtwork thumbnails, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -76,10 +77,24 @@ internal static class NowPlaying
 
         try
         {
-            // Apple Music can expose the previous song's thumbnail alongside new
-            // metadata, even from one media-properties snapshot. That thumbnail
-            // has no track identity to validate. Use only catalog art matched to
-            // this captured title/artist/album; leave the placeholder otherwise.
+            using var localDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            localDeadline.CancelAfter(TimeSpan.FromSeconds(1.5));
+            var localToken = localDeadline.Token;
+            var track = new TrackMetadata(info.Title, info.Artist, info.Album);
+            try
+            {
+                var bytes = await thumbnails.ReadStableAsync(track,
+                    ct => ReadSessionThumbnailAsync(session, track, ct), localToken).WaitAsync(localToken);
+                if (bytes is not null)
+                {
+                    var local = await DecodeImageAsync(bytes, localToken);
+                    if (local is not null) return local;
+                }
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+            catch (Exception ex) when (IsArtworkError(ex) || ex is UnauthorizedAccessException) { }
+
+            token.ThrowIfCancellationRequested();
             return await TryItunesArtworkAsync(info, token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -92,6 +107,22 @@ internal static class NowPlaying
             cancellationToken.ThrowIfCancellationRequested();
             return null;
         }
+    }
+
+    private static async Task<byte[]?> ReadSessionThumbnailAsync(GlobalSystemMediaTransportControlsSession session,
+        TrackMetadata expected, CancellationToken token)
+    {
+        var properties = await session.TryGetMediaPropertiesAsync().AsTask(token);
+        if (TrackMetadata.FromMediaFields(properties.Title, properties.Artist, properties.AlbumTitle) != expected
+            || properties.Thumbnail is not { } thumbnail) return null;
+
+        using var stream = await thumbnail.OpenReadAsync().AsTask(token);
+        var size = stream.Size;
+        if (size is 0 or > MaxArtworkBytes) return null;
+        using var input = stream.AsStreamForRead();
+        var bytes = new byte[(int)size];
+        await input.ReadExactlyAsync(bytes, token);
+        return bytes;
     }
 
     private static bool IsArtworkError(Exception error) => error is

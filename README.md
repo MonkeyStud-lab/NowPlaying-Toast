@@ -30,7 +30,7 @@ Keep the executable and scripts together. If you move the folder, rerun `Add-To-
 - Single-instance tray app with optional startup registration.
 - No idle process scanning or timer polling for second launches. A five-second retry runs only if Windows' media-session manager cannot initialize.
 - Album art and clickable track cards.
-- Artwork is verified against the track title, artist, and album in Apple's catalog. Apple Music's Windows session thumbnail can lag behind the title during skipping, so it is not used. A placeholder is shown while verified artwork loads, or when the catalog is unavailable or has no exact match. Artwork requires an Internet connection.
+- The toast reads artwork directly from Apple Music on Windows. It waits for two matching thumbnail samples for the current track and checks for a cover carried over from the last album. When the thumbnail is missing, slow, or ambiguous, it searches Apple's catalog for the track title, artist, and album. Only the catalog fallback requires an Internet connection.
 - Configurable duration, corner, size, dark/light theme, monitor, and sound.
 - DPI-aware placement across multiple monitors.
 - Optional GitHub update notification on startup; updates are downloaded manually.

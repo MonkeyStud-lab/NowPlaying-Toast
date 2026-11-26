@@ -21,5 +21,6 @@
     <Compile Include="../src/TrackNotificationState.cs" Link="TrackNotificationState.cs" />
     <Compile Include="../src/ArtworkMatcher.cs" Link="ArtworkMatcher.cs" />
     <Compile Include="../src/TrackMetadata.cs" Link="TrackMetadata.cs" />
+    <Compile Include="../src/SessionArtwork.cs" Link="SessionArtwork.cs" />
   </ItemGroup>
 </Project>

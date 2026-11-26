@@ -13,6 +13,7 @@ internal sealed class ToastApp : ApplicationContext
     private readonly System.Windows.Forms.Timer _managerRetry;
     private readonly TrackRefreshQueue _refreshQueue;
     private readonly TrackNotificationState _trackState = new();
+    private SessionArtwork _thumbnails = new();
     private readonly RegisteredWaitHandle _flashWait;
     private readonly RegisteredWaitHandle _exitWait;
     private AppSettings _settings;
@@ -147,6 +148,7 @@ internal sealed class ToastApp : ApplicationContext
     {
         ++_sessionGeneration;
         CancelArtwork();
+        _thumbnails = new SessionArtwork();
         if (_session is not null)
         {
             try
@@ -196,7 +198,7 @@ internal sealed class ToastApp : ApplicationContext
             // Do not delay the title or subsequent track events while artwork is loading.
             _form.ShowTrack(info);
             _artworkRequest = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            _ = LoadArtworkAsync(info, generation, _artworkRequest);
+            _ = LoadArtworkAsync(session, info, generation, _artworkRequest);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
@@ -207,11 +209,12 @@ internal sealed class ToastApp : ApplicationContext
         }
     }
 
-    private async Task LoadArtworkAsync(NowPlayingInfo info, long generation, CancellationTokenSource request)
+    private async Task LoadArtworkAsync(GlobalSystemMediaTransportControlsSession session,
+        NowPlayingInfo info, long generation, CancellationTokenSource request)
     {
         try
         {
-            using var artwork = await NowPlaying.GetArtworkAsync(info, request.Token);
+            using var artwork = await NowPlaying.GetArtworkAsync(session, info, _thumbnails, request.Token);
             if (!_exiting && !request.IsCancellationRequested &&
                 ReferenceEquals(request, _artworkRequest) && generation == _sessionGeneration)
                 _form.UpdateArtwork(info.Key, artwork);
