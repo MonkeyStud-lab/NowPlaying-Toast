@@ -9,7 +9,6 @@ internal sealed class UpdateCheckResult
 {
     public bool UpdateAvailable { get; init; }
     public string? LatestTag { get; init; }
-    public string? ReleaseUrl { get; init; }
     public string? Message { get; init; }
 }
 
@@ -47,21 +46,17 @@ internal static class UpdateCheck
                 return new UpdateCheckResult { Message = "No release tag found." };
 
             var tag = tagEl.GetString() ?? "";
-            var url = root.TryGetProperty("html_url", out var urlEl)
-                ? urlEl.GetString()
-                : GitHubUrl + "/releases";
 
             var latest = ParseVersion(tag);
             var current = GetAssemblyVersion();
             if (latest is null)
-                return new UpdateCheckResult { LatestTag = tag, ReleaseUrl = url, Message = "Could not parse latest version." };
+                return new UpdateCheckResult { LatestTag = tag, Message = "Could not parse latest version." };
 
             var newer = latest.CompareTo(Normalize(current)) > 0;
             return new UpdateCheckResult
             {
                 UpdateAvailable = newer,
                 LatestTag = tag,
-                ReleaseUrl = url,
                 Message = newer
                     ? $"Update available: {tag} (you have {GetDisplayVersion()})"
                     : $"Up to date ({GetDisplayVersion()})"

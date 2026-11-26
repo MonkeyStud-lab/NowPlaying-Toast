@@ -90,12 +90,17 @@ internal sealed class ToastForm : Form
 
     protected override bool OnGetDpiScaledSize(int deviceDpiOld, int deviceDpiNew, ref Size desiredSize)
     {
-        var scale = _settings.SizeScale * deviceDpiNew / 96f;
-        desiredSize = new Size((int)(400 * scale), (int)(112 * scale));
+        desiredSize = CardSizeAtDpi(deviceDpiNew);
         return true;
     }
 
     private float PixelScale => _settings.SizeScale * DeviceDpi / 96f;
+
+    private Size CardSizeAtDpi(int dpi)
+    {
+        var scale = _settings.SizeScale * dpi / 96f;
+        return new Size((int)Math.Round(320 * scale), (int)Math.Round(80 * scale));
+    }
 
     public void ApplySettings(AppSettings settings)
     {
@@ -109,7 +114,7 @@ internal sealed class ToastForm : Form
     private void ApplyLayoutFromSettings()
     {
         float scale = PixelScale;
-        Size = new Size((int)(400 * scale), (int)(112 * scale));
+        Size = CardSizeAtDpi(DeviceDpi);
         BackColor = CardBackground;
         var hrgn = NativeMethods.CreateRoundRectRgn(0, 0, Width + 1, Height + 1, (int)(18 * scale), (int)(18 * scale));
         if (hrgn != IntPtr.Zero)
@@ -148,8 +153,8 @@ internal sealed class ToastForm : Form
         _anim.Stop();
         _phase = Phase.Hidden;
         _trackKey = null;
-        Opacity = 1;
         Hide();
+        ReplaceArtwork(null);
     }
 
     public void ShowMessage(string title, string body)
@@ -169,7 +174,7 @@ internal sealed class ToastForm : Form
         _artist = string.IsNullOrWhiteSpace(np.Artist) ? np.Album : np.Artist;
         _app = np.App;
         _trackKey = np.Key;
-        ReplaceArtwork(np.Art);
+        ReplaceArtwork(null);
         BeginShow();
     }
 
@@ -267,11 +272,7 @@ internal sealed class ToastForm : Form
             Invalidate();
             if (_t <= 0f)
             {
-                _phase = Phase.Hidden;
-                _trackKey = null;
-                _anim.Stop();
-                Opacity = 1;
-                Hide();
+                HideImmediate();
             }
         }
         else
@@ -287,7 +288,7 @@ internal sealed class ToastForm : Form
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
         g.Clear(CardBackground);
 
-        using (var path = RoundRect(1, 1, Width - 3, Height - 3, (int)(16 * scale)))
+        using (var path = RoundRect(1, 1, Width - 3, Height - 3, (int)(10 * scale)))
         {
             using var glow = new Pen(AppleRedSoft, 4f * scale);
             g.DrawPath(glow, path);
@@ -295,8 +296,8 @@ internal sealed class ToastForm : Form
             g.DrawPath(edge, path);
         }
 
-        int artSize = (int)(80 * scale);
-        int artX = (int)(14 * scale);
+        int artSize = (int)(56 * scale);
+        int artX = (int)(12 * scale);
         int artY = (Height - artSize) / 2;
         var artRect = new Rectangle(artX, artY, artSize, artSize);
         using (var artPath = RoundRect(artX, artY, artSize, artSize, (int)(10 * scale)))
@@ -324,8 +325,8 @@ internal sealed class ToastForm : Form
             g.DrawPath(artBorder, artPath);
         }
 
-        int textX = artX + artSize + (int)(14 * scale);
-        int textW = Width - textX - (int)(16 * scale);
+        int textX = artX + artSize + (int)(10 * scale);
+        int textW = Width - textX - (int)(10 * scale);
 
         // Font sizes are points; GDI+ already applies the display DPI to them.
         using var titleFont = new Font("Segoe UI Semibold", 12f * _settings.SizeScale);
@@ -333,12 +334,12 @@ internal sealed class ToastForm : Form
         using var appFont = new Font("Segoe UI", 8.5f * _settings.SizeScale);
         using var titleBrush = new SolidBrush(TitleColor);
         using var artistBrush = new SolidBrush(ArtistColor);
-        using var appBrush = new SolidBrush(AppleRed);
+        using var appBrush = new SolidBrush(_settings.Theme == ToastTheme.Light ? Color.FromArgb(184, 28, 55) : AppleRed);
 
         using var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
-        g.DrawString(_title, titleFont, titleBrush, new RectangleF(textX, 20 * scale, textW, 28 * scale), sf);
-        g.DrawString(_artist, artistFont, artistBrush, new RectangleF(textX, 48 * scale, textW, 22 * scale), sf);
-        g.DrawString(_app, appFont, appBrush, new RectangleF(textX, 74 * scale, textW, 18 * scale), sf);
+        g.DrawString(_title, titleFont, titleBrush, new RectangleF(textX, 8 * scale, textW, 24 * scale), sf);
+        g.DrawString(_artist, artistFont, artistBrush, new RectangleF(textX, 32 * scale, textW, 21 * scale), sf);
+        g.DrawString(_app, appFont, appBrush, new RectangleF(textX, 54 * scale, textW, 18 * scale), sf);
     }
 
     private static GraphicsPath RoundRect(int x, int y, int w, int h, int r)
