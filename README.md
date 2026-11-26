@@ -100,4 +100,4 @@ dotnet publish src\NowPlayingToast.csproj -c Release -r win-x64 --self-contained
 
 ## Version
 
-Source version: **1.2.0**. This version includes verified catalog artwork, faster track/art handling, lower-memory publishing, an event-driven lifecycle, safer settings, local diagnostics, .NET 10 builds, automated checks, startup shortcut/removal, and graceful shutdown. Settings remain compatible with v1.1.0. Download the Windows package from [GitHub Releases](https://github.com/MonkeyStud-lab/NowPlaying-Toast/releases/latest).
+Version **1.2.1** reduces the Normal popup to 320 × 80 at 100% display scaling and keeps the existing font sizes. Clicking a notification preserves a maximized Apple Music window. The app retries failed media-session connections and limits artwork searches to tracks from the registered Apple Music app. Existing settings carry over. Download the Windows package from [GitHub Releases](https://github.com/MonkeyStud-lab/NowPlaying-Toast/releases/latest).
